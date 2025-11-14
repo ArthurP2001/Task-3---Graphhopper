@@ -1,0 +1,118 @@
+name: GraphHopper CI – Mutation Gate
+
+on:
+  push:
+    branches: [ main, master, develop, '**/feature/**' ]
+  pull_request:
+    branches: [ '**' ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-mutation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Cache ~/.m2
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      # Étape PIT baseline cache (par branche)
+      - name: Restore PIT baseline cache
+        id: cache-baseline
+        uses: actions/cache@v4
+        with:
+          path: .mutation-baseline.txt
+          key: pit-baseline-${{ github.ref_name }}
+          restore-keys: |
+            pit-baseline-${{ github.ref_name }}
+
+      - name: Ensure baseline file exists
+        run: |
+          if [ ! -f .mutation-baseline.txt ]; then
+            echo "0" > .mutation-baseline.txt
+          fi
+          echo "Baseline (prev) = $(cat .mutation-baseline.txt)"
+
+      # Build + tests
+      - name: Build & unit tests (core)
+        run: mvn -q -B -e -DskipITs=true clean test -pl core
+
+      # PIT
+      - name: Run PIT mutation testing (core)
+        run: mvn -q -B org.pitest:pitest-maven:mutationCoverage -pl core
+
+      # Extraction du score PIT
+      - name: Extract mutation score
+        id: pit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rpt_dir=$(ls -1d core/target/pit-reports/* | tail -n1)
+          html="$rpt_dir/index.html"
+          # Cherche un pourcentage à partir de "Mutation Coverage", fallback: dernier % de la page
+          score=$(grep -oE 'Mutation Coverage[^%]*([0-9]{1,3})%' "$html" | tail -n1 | grep -oE '([0-9]{1,3})%$' | tr -d '%')
+          if [ -z "${score:-}" ]; then
+            score=$(grep -oE '([0-9]{1,3})%' "$html" | tail -n1 | tr -d '%')
+          fi
+          if [ -z "${score:-}" ]; then
+            echo "Impossible d'extraire le score PIT."
+            cat "$html" | head -n 100
+            exit 1
+          fi
+          echo "current_score=$score" >> $GITHUB_OUTPUT
+          echo "Current = $score"
+
+      # Comparaison & gate
+      - name: Compare current vs baseline
+        id: compare
+        shell: bash
+        run: |
+          prev=$(cat .mutation-baseline.txt | tr -d ' \n\r' || echo 0)
+          curr=${{ steps.pit.outputs.current_score }}
+          echo "Baseline(prev)=$prev | Current(curr)=$curr"
+          if [ "$curr" -lt "$prev" ]; then
+            echo "Score de mutation réduit ($curr < $prev). Échec du build."
+            exit 1
+          else
+            echo "$curr" > .mutation-baseline.txt
+            echo "Score conservé ou amélioré ($curr ≥ $prev)."
+          fi
+
+      # Upload rapport PIT en artefact
+      - name: Upload PIT report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-report
+          path: core/target/pit-reports/
+
+      # Update cache baseline
+      - name: Save updated baseline cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: .mutation-baseline.txt
+          key: pit-baseline-${{ github.ref_name }}
+
+  # Rickroll en cas d'échec global
+  rickroll:
+    needs: [build-and-mutation]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rick Astley – Never Gonna Give You Up
+        uses: SangeetAgarwal/random-rickroll@v1.0.0

@@ -1,0 +1,12 @@
+name: Rickroll on Failure
+on: workflow_run
+jobs:
+  rickroll:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rick Astley Time
+        run: |
+          echo "Uh oh... A test failed!"
+          echo "Never gonna give you up"
+          xdg-open "https://www.youtube.com/watch?v=dQw4w9WgXcQ" || true

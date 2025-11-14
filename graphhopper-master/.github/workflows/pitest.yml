@@ -1,0 +1,29 @@
+name: PIT Mutation Analysis
+on: [push, pull_request]
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Run PIT Mutation Tests
+        run: mvn org.pitest:pitest-maven:mutationCoverage -pl core
+
+      - name: Verify Mutation Score
+        run: |
+          SCORE=$(grep -oPm1 "(?<=<mutationCoverage>).*(?=</mutationCoverage>)" core/target/pit-reports/**/*.xml | head -1)
+          echo "Mutation Score: $SCORE"
+          if [ $(echo "$SCORE < 64" | bc) -eq 1 ]; then
+            echo "Mutation score decreased!"
+            exit 1
+          else
+            echo "Mutation score acceptable."
+          fi
